@@ -1,0 +1,87 @@
+{{- if .Values.haproxy.enabled }}
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: {{ template "percona-xtradb-cluster.fullname" . }}-haproxy
+  labels:
+    app: {{ template "percona-xtradb-cluster.fullname" . }}
+    release: "{{ .Release.Name }}"
+    heritage: "{{ .Release.Service }}"
+spec:
+  strategy:
+    type: RollingUpdate
+  revisionHistoryLimit: 1
+  replicas: {{ .Values.haproxy.replicas }}
+  selector:
+    matchLabels:
+      app: {{ template "percona-xtradb-cluster.name" . }}-haproxy
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      name: {{ template "percona-xtradb-cluster.fullname" . }}-haproxy
+      labels:
+        app: {{ template "percona-xtradb-cluster.name" . }}-haproxy
+        release: {{ .Release.Name }}
+      annotations:
+        checksum/config: {{ print (include "config-haproxy.cfg" .) (include "config-haproxy_init.sh" .) | sha256sum }}
+    spec:
+      nodeSelector:
+{{ toYaml .Values.nodeSelector | indent 8 }}
+      tolerations:
+{{ toYaml .Values.tolerations | indent 8 }}
+      affinity:
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app:  {{ template "percona-xtradb-cluster.name" . }}-haproxy
+                    release: {{ .Release.Name }}
+                topologyKey: failure-domain.beta.kubernetes.io/zone
+      initContainers:
+      - name: config-init
+        image: haproxy:2.0.4
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        args:
+        - /readonly/haproxy_init.sh
+        volumeMounts:
+        - name: config-volume
+          mountPath: /readonly
+          readOnly: true
+        - name: data
+          mountPath: /data
+      containers:
+      - name: haproxy
+        image: haproxy:2.0.4
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8888
+          initialDelaySeconds: 5
+          periodSeconds: 3
+        ports:
+        - name: mysql-write
+          containerPort: {{ default "3306" .Values.haproxy.writePort }}
+        - name: mysql-read
+          containerPort: {{ default "3307" .Values.haproxy.readPort }}
+        volumeMounts:
+        - name: data
+          mountPath: /usr/local/etc/haproxy
+        - name: shared-socket
+          mountPath: /run/haproxy
+{{- if .Values.haproxy.priorityClassName }}
+      priorityClassName: {{ .Values.haproxy.priorityClassName }}
+{{- end }}
+      volumes:
+      - name: config-volume
+        configMap:
+          name: {{ template "percona-xtradb-cluster.fullname" . }}-configmap
+      - name: shared-socket
+        emptyDir: {}
+      - name: data
+        emptyDir: {}
+{{- end }}
